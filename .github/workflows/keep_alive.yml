@@ -1,0 +1,39 @@
+name: Lemehost Keep Alive Worker
+
+on:
+  schedule:
+    # Runs automatically every 25 minutes
+    - cron: '*/25 * * * *'
+  workflow_dispatch: # Allows manual run from GitHub UI
+
+jobs:
+  run-worker:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install Dependencies
+        run: |
+          pip install playwright
+          playwright install chromium
+
+      - name: Run Keep Alive Worker
+        env:
+          LEME_USERNAME: ${{ secrets.LEME_USERNAME }}
+          LEME_PASSWORD: ${{ secrets.LEME_PASSWORD }}
+        run: python keep_alive.py
+
+      - name: Commit and Push Updated Session
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add state.json || true
+          git commit -m "Auto-update session state" || true
+          git push || true
