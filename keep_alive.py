@@ -6,7 +6,7 @@ USERNAME = os.environ.get("LEME_USERNAME", "YOUR_USERNAME")
 PASSWORD = os.environ.get("LEME_PASSWORD", "YOUR_PASSWORD")
 
 LOGIN_URL = "https://lemehost.com/site/login"
-SERVER_URL = "https://lemehost.com/server/10231429/free-plan"
+SERVER_URL = "https://lemehost.com/server/10228912/free-plan"
 STATE_FILE = "state.json"
 
 def main():
