@@ -1,6 +1,7 @@
 import os
 import time
 from playwright.sync_api import sync_playwright
+import ddddocr
 
 # لیست اکانت‌ها و سرورها
 ACCOUNTS = [
@@ -23,6 +24,9 @@ ACCOUNTS = [
 
 LOGIN_URL = "https://lemehost.com/site/login"
 
+# لود کردن مدل هوش مصنوعی کپچا (show_ad=False برای عدم نمایش تبلیغ کتابخانه)
+ocr = ddddocr.DdddOcr(show_ad=False)
+
 def process_account(browser, acc):
     print(f"\n==========================================")
     print(f"🚀 Processing: {acc['name']}")
@@ -33,7 +37,6 @@ def process_account(browser, acc):
     username = acc["username"]
     password = acc["password"]
 
-    # بررسی وجود فایل کوکی ذخیره‌شده
     if os.path.exists(state_file):
         print(f"🔑 Found {state_file}. Using stored session...")
         context = browser.new_context(storage_state=state_file)
@@ -43,13 +46,11 @@ def process_account(browser, acc):
         page.goto(server_url, timeout=60000)
         page.wait_for_timeout(3000)
 
-        # اگر کوکی منقضی شده باشد
         if "login" in page.url.lower():
             print(f"⚠️ Session expired for {acc['name']}. Removing {state_file} and re-logging in...")
             os.remove(state_file)
             context.close()
             return process_account(browser, acc)
-
     else:
         print(f"🌐 No {state_file} found. Opening login page...")
         context = browser.new_context()
@@ -68,18 +69,39 @@ def process_account(browser, acc):
         page.goto(server_url, timeout=60000)
         page.wait_for_timeout(3000)
 
-    # پیدا کردن دکمه Extend time و کلیک روی آن
+    # پیدا کردن المان‌های کپچا و دکمه
+    captcha_img_selector = '#extendfreeplanform-captcha-image'
+    captcha_input_selector = '#extendfreeplanform-captcha'
     button_selector = 'button:has-text("Extend time")'
 
     if page.is_visible(button_selector):
-        print("4. 'Extend time' button found! Clicking button...")
+        print("4. 'Extend time' button found!")
+        
+        # 🤖 بررسی وجود کپچا در صفحه
+        if page.is_visible(captcha_img_selector):
+            print("⚠️ CAPTCHA detected on extend form! Attempting to solve...")
+            try:
+                # گرفتن اسکرین‌شات فقط از خود عکس کپچا
+                captcha_bytes = page.locator(captcha_img_selector).screenshot()
+                
+                # ارسال عکس به هوش مصنوعی برای خواندن متن
+                captcha_text = ocr.classification(captcha_bytes)
+                print(f"🧩 AI solved CAPTCHA as: '{captcha_text}'")
+                
+                # پر کردن فیلد کپچا
+                page.fill(captcha_input_selector, captcha_text)
+                page.wait_for_timeout(1000)
+            except Exception as e:
+                print(f"❌ Failed to solve captcha: {e}")
+
+        # کلیک روی دکمه تمدید
+        print("5. Clicking Extend button...")
         page.click(button_selector)
         page.wait_for_timeout(5000)
-        print(f"✅ Success: Server time extended successfully for {acc['name']}.")
+        print(f"✅ Success: Server time extended (or attempted) for {acc['name']}.")
     else:
         print(f"⚠️ 'Extend time' button not found for {acc['name']}.")
 
-    # ذخیره و به‌روزرسانی کوکی اکانت
     try:
         context.storage_state(path=state_file)
     except Exception:
