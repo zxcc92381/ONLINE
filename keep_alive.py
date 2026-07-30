@@ -78,8 +78,8 @@ def send_telegram_photo(image_bytes, caption=""):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
     boundary = uuid.uuid4().hex
     
-    # اصلاح پس‌زمینه شفاف برای نمایش تمیز در تلگرام
-    display_bytes = make_background_white(image_bytes)
+    # اینجا مستقیما عکس را میفرستیم چون قبلش در تابع اصلی سفید شده است
+    display_bytes = image_bytes
 
     body = bytearray()
     
@@ -155,7 +155,7 @@ def is_countdown_zero(page):
 
 def extend_time_with_retry(page, acc_name):
     """تلاش برای حل کپچا، ارسال تصویر به تلگرام و تمدید زمان"""
-    max_attempts = 5
+    max_attempts = 15
     captcha_img_selector = "#extendfreeplanform-captcha-image"
     captcha_input_selector = "#extendfreeplanform-captcha"
     button_selector = 'button:has-text("Extend time")'
@@ -176,15 +176,27 @@ def extend_time_with_retry(page, acc_name):
         # حل کپچا
         if page.is_visible(captcha_img_selector):
             try:
-                # گرفتن عکس خام مستقیم از عنصر بدون هیچ دستکاری
+                # اطمینان از لود شدن کامل عکس
+                page.wait_for_function(
+                    f"document.querySelector('{captcha_img_selector}').complete", 
+                    timeout=10000
+                )
+                page.wait_for_timeout(500)
+
+                # گرفتن عکس خام مستقیم از عنصر
                 raw_captcha_bytes = page.locator(captcha_img_selector).screenshot()
                 
-                # خواندن مستقیم توسط ddddocr
-                captcha_text = ocr.classification(raw_captcha_bytes).strip()
+                # تبدیل پس‌زمینه به سفید قبل از دادن به ddddocr
+                processed_captcha_bytes = make_background_white(raw_captcha_bytes)
                 
-                # ارسال به تلگرام همراه با عکس صحیح
+                # خواندن کپچا با ddddocr با عکس پردازش شده
+                captcha_text = ocr.classification(processed_captcha_bytes).strip()
+                if not captcha_text:
+                    captcha_text = "EMPTY"
+
+                # ارسال به تلگرام
                 caption = f"🧩 [{acc_name}] CAPTCHA Attempt #{attempt}\nAI Result: '{captcha_text}'"
-                send_telegram_photo(raw_captcha_bytes, caption=caption)
+                send_telegram_photo(processed_captcha_bytes, caption=caption)
 
                 # پر کردن اینپوت کپچا
                 page.fill(captcha_input_selector, "")
@@ -209,7 +221,7 @@ def extend_time_with_retry(page, acc_name):
                 if page.is_visible(captcha_img_selector):
                     log_and_notify(f"🔄 [{acc_name}] Refreshing CAPTCHA image for next try...")
                     page.click(captcha_img_selector)
-                    page.wait_for_timeout(2000)
+                    page.wait_for_timeout(3000)
 
     error_msg = f"🚨 **ALERT [{acc_name}]**:\nFailed to extend plan after {max_attempts} attempts!"
     log_and_notify(error_msg)
