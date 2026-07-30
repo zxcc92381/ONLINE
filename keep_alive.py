@@ -5,7 +5,7 @@ import uuid
 import urllib.parse
 import urllib.request
 import ddddocr
-from PIL import Image, ImageEnhance
+from PIL import Image
 from playwright.sync_api import sync_playwright
 
 # تنظیمات ربات تلگرام
@@ -54,30 +54,46 @@ def log_and_notify(message):
         print(f"❌ Failed to send log to Telegram: {e}")
 
 
+def make_background_white(image_bytes):
+    """جلوگیری از سیاه شدن تصاویر شفاف (Transparent PNG)"""
+    try:
+        img = Image.open(io.BytesIO(image_bytes)).convert("RGBA")
+        # ساخت یک تصویر سفید با همان ابعاد
+        white_bg = Image.new("RGBA", img.size, (255, 255, 255, 255))
+        # قرار دادن تصویر کپچا روی پس‌زمینه سفید
+        combined = Image.alpha_composite(white_bg, img).convert("RGB")
+        
+        output = io.BytesIO()
+        combined.save(output, format="PNG")
+        return output.getvalue()
+    except Exception:
+        return image_bytes
+
+
 def send_telegram_photo(image_bytes, caption=""):
-    """ارسال عکس کپچا به همراه توضیحات تشخیص هوش مصنوعی به تلگرام"""
+    """ارسال عکس کپچا به همراه توضیحات به تلگرام"""
     if not TELEGRAM_BOT_TOKEN or TELEGRAM_BOT_TOKEN == "YOUR_TELEGRAM_BOT_TOKEN":
         return
 
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
     boundary = uuid.uuid4().hex
     
+    # اصلاح پس‌زمینه شفاف برای نمایش تمیز در تلگرام
+    display_bytes = make_background_white(image_bytes)
+
     body = bytearray()
     
-    # اضافه کردن chat_id
     body.extend(f"--{boundary}\r\n".encode('utf-8'))
     body.extend(f'Content-Disposition: form-data; name="chat_id"\r\n\r\n{TELEGRAM_CHAT_ID}\r\n'.encode('utf-8'))
     
-    # اضافه کردن caption
     if caption:
         body.extend(f"--{boundary}\r\n".encode('utf-8'))
         body.extend(f'Content-Disposition: form-data; name="caption"\r\n\r\n{caption}\r\n'.encode('utf-8'))
         
-    # اضافه کردن فایل تصویر
     body.extend(f"--{boundary}\r\n".encode('utf-8'))
     body.extend(f'Content-Disposition: form-data; name="photo"; filename="captcha.png"\r\n'.encode('utf-8'))
     body.extend(b'Content-Type: image/png\r\n\r\n')
-    body.extend(image_bytes)
+    body.extend(display_bytes)
     body.extend(b'\r\n')
     
     body.extend(f"--{boundary}--\r\n".encode('utf-8'))
@@ -90,25 +106,9 @@ def send_telegram_photo(image_bytes, caption=""):
     try:
         req = urllib.request.Request(url, data=bytes(body), headers=headers)
         with urllib.request.urlopen(req) as response:
-            print("📸 CAPTCHA image sent to Telegram successfully.")
+            pass
     except Exception as e:
         print(f"❌ Failed to send Telegram photo: {e}")
-
-
-def preprocess_captcha_image(image_bytes):
-    """پیش‌پردازش تصویر کپچا جهت افزایش دقت OCR"""
-    try:
-        img = Image.open(io.BytesIO(image_bytes)).convert("L")
-        img = img.resize((img.width * 2, img.height * 2), Image.Resampling.LANCZOS)
-        enhancer = ImageEnhance.Contrast(img)
-        img = enhancer.enhance(2.5)
-
-        output = io.BytesIO()
-        img.save(output, format="PNG")
-        return output.getvalue()
-    except Exception as e:
-        print(f"⚠️ Image preprocessing failed: {e}")
-        return image_bytes
 
 
 def check_and_start_server(page, acc_name):
@@ -168,29 +168,25 @@ def extend_time_with_retry(page, acc_name):
         log_and_notify(f"🔄 [{acc_name}] Attempt {attempt}/{max_attempts} to solve CAPTCHA & extend time...")
 
         if not page.is_visible(button_selector):
-            log_and_notify(f"⚠️ [{acc_name}] 'Extend time' button not visible. Refreshing page...")
+            log_and_notify(f"⚠️ [{acc_name}] 'Extend time' button not visible. Reloading page...")
             page.reload(timeout=60000)
             page.wait_for_timeout(3000)
             continue
 
-        # حل کپچا و ارسال عکس به تلگرام
+        # حل کپچا
         if page.is_visible(captcha_img_selector):
             try:
+                # گرفتن عکس خام مستقیم از عنصر بدون هیچ دستکاری
                 raw_captcha_bytes = page.locator(captcha_img_selector).screenshot()
-                processed_bytes = preprocess_captcha_image(raw_captcha_bytes)
                 
-                captcha_text = ocr.classification(processed_bytes).strip()
+                # خواندن مستقیم توسط ddddocr
+                captcha_text = ocr.classification(raw_captcha_bytes).strip()
                 
-                # ارسال تصویر کپچا و متن تشخیص داده شده به تلگرام
+                # ارسال به تلگرام همراه با عکس صحیح
                 caption = f"🧩 [{acc_name}] CAPTCHA Attempt #{attempt}\nAI Result: '{captcha_text}'"
                 send_telegram_photo(raw_captcha_bytes, caption=caption)
 
-                if len(captcha_text) < 3:
-                    log_and_notify(f"⚠️ [{acc_name}] Recognized text too short ('{captcha_text}'). Refreshing CAPTCHA...")
-                    page.click(captcha_img_selector)
-                    page.wait_for_timeout(1500)
-                    continue
-
+                # پر کردن اینپوت کپچا
                 page.fill(captcha_input_selector, "")
                 page.fill(captcha_input_selector, captcha_text)
                 page.wait_for_timeout(500)
@@ -198,12 +194,12 @@ def extend_time_with_retry(page, acc_name):
             except Exception as e:
                 log_and_notify(f"❌ [{acc_name}] Error solving captcha: {e}")
 
-        # کلیک روی دکمه تمدید
+        # کلیک روی دکمه Extend time
         log_and_notify(f"👉 [{acc_name}] Clicking Extend button...")
         page.click(button_selector)
         page.wait_for_timeout(4000)
 
-        # چک کردن تایمر بعد از تمدید
+        # چک کردن تایمر
         if not is_countdown_zero(page):
             log_and_notify(f"✅ [{acc_name}] SUCCESS! Server time extended on attempt {attempt}.")
             return True
@@ -211,10 +207,10 @@ def extend_time_with_retry(page, acc_name):
             log_and_notify(f"❌ [{acc_name}] Attempt {attempt} failed. Countdown is still 00:00:00.")
             if attempt < max_attempts:
                 if page.is_visible(captcha_img_selector):
+                    log_and_notify(f"🔄 [{acc_name}] Refreshing CAPTCHA image for next try...")
                     page.click(captcha_img_selector)
-                    page.wait_for_timeout(1500)
+                    page.wait_for_timeout(2000)
 
-    # هشدار نهایی
     error_msg = f"🚨 **ALERT [{acc_name}]**:\nFailed to extend plan after {max_attempts} attempts!"
     log_and_notify(error_msg)
     return False
@@ -256,7 +252,7 @@ def process_account(browser, acc):
         page.goto(server_url, timeout=60000)
         page.wait_for_timeout(3000)
 
-    # ۱. چک و استارت سرور
+    # ۱. استارت سرور
     check_and_start_server(page, acc_name)
 
     # ۲. تمدید زمان
