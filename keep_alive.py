@@ -78,7 +78,6 @@ def send_telegram_photo(image_bytes, caption=""):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
     boundary = uuid.uuid4().hex
     
-    # اینجا مستقیما عکس را میفرستیم چون قبلش در تابع اصلی سفید شده است
     display_bytes = image_bytes
 
     body = bytearray()
@@ -112,7 +111,7 @@ def send_telegram_photo(image_bytes, caption=""):
 
 
 def check_and_start_server(page, acc_name):
-    """چک کردن وضعیت آنلاین بودن و کلیک روی Start"""
+    """چک کردن وضعیت آنلاین بودن، کلیک روی Start و بررسی روشن شدن سرور"""
     try:
         status_locator = page.locator('[data-put="status"]')
         if status_locator.is_visible():
@@ -124,16 +123,33 @@ def check_and_start_server(page, acc_name):
                 start_btn = page.locator('button[data-state="start"]')
                 if start_btn.is_visible():
                     start_btn.click(force=True)
-                    log_and_notify(f"▶️ [{acc_name}] Clicked 'Start' button successfully.")
-                    page.wait_for_timeout(3000)
+                    log_and_notify(f"▶️ [{acc_name}] Clicked 'Start' button successfully. Waiting for server to come online...")
+                    
+                    # بررسی و انتظار برای روشن شدن کامل سرور (حداکثر ۱۰ بار تلاش ۳ ثانیه‌ای = ۳۰ ثانیه)
+                    max_checks = 10
+                    for check in range(1, max_checks + 1):
+                        page.wait_for_timeout(3000)
+                        current_status = status_locator.text_content().strip().lower()
+                        log_and_notify(f"⏳ [{acc_name}] Checking status after start attempt ({check}/{max_checks}): '{current_status}'")
+                        
+                        if current_status == "online":
+                            log_and_notify(f"🟢 [{acc_name}] Server is now ONLINE!")
+                            return True
+
+                    log_and_notify(f"⚠️ [{acc_name}] Server did not reach 'online' state within timeout (Current status: '{current_status}').")
+                    return False
                 else:
                     log_and_notify(f"⚠️ [{acc_name}] Start button not found.")
+                    return False
             else:
                 log_and_notify(f"🟢 [{acc_name}] Server is already online.")
+                return True
         else:
             log_and_notify(f"⚠️ [{acc_name}] Server status element not found.")
+            return False
     except Exception as e:
-        log_and_notify(f"❌ [{acc_name}] Error checking server status: {e}")
+        log_and_notify(f"❌ [{acc_name}] Error checking/starting server: {e}")
+        return False
 
 
 def is_countdown_zero(page):
@@ -264,11 +280,11 @@ def process_account(browser, acc):
         page.goto(server_url, timeout=60000)
         page.wait_for_timeout(3000)
 
-    # ۱. استارت سرور
-    check_and_start_server(page, acc_name)
-
-    # ۲. تمدید زمان
+    # ۱. ابتدا تمدید زمان
     extend_time_with_retry(page, acc_name)
+
+    # ۲. سپس چک کردن و روشن کردن سرور در صورت خاموش بودن + بررسی روشن شدن آن
+    check_and_start_server(page, acc_name)
 
     try:
         context.storage_state(path=state_file)
