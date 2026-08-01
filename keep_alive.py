@@ -58,9 +58,7 @@ def make_background_white(image_bytes):
     """جلوگیری از سیاه شدن تصاویر شفاف (Transparent PNG)"""
     try:
         img = Image.open(io.BytesIO(image_bytes)).convert("RGBA")
-        # ساخت یک تصویر سفید با همان ابعاد
         white_bg = Image.new("RGBA", img.size, (255, 255, 255, 255))
-        # قرار دادن تصویر کپچا روی پس‌زمینه سفید
         combined = Image.alpha_composite(white_bg, img).convert("RGB")
         
         output = io.BytesIO()
@@ -71,17 +69,14 @@ def make_background_white(image_bytes):
 
 
 def send_telegram_photo(image_bytes, caption=""):
-    """ارسال عکس کپچا به همراه توضیحات به تلگرام"""
+    """ارسال عکس به همراه توضیحات به تلگرام"""
     if not TELEGRAM_BOT_TOKEN or TELEGRAM_BOT_TOKEN == "YOUR_TELEGRAM_BOT_TOKEN":
         return
 
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
     boundary = uuid.uuid4().hex
     
-    display_bytes = image_bytes
-
     body = bytearray()
-    
     body.extend(f"--{boundary}\r\n".encode('utf-8'))
     body.extend(f'Content-Disposition: form-data; name="chat_id"\r\n\r\n{TELEGRAM_CHAT_ID}\r\n'.encode('utf-8'))
     
@@ -90,11 +85,10 @@ def send_telegram_photo(image_bytes, caption=""):
         body.extend(f'Content-Disposition: form-data; name="caption"\r\n\r\n{caption}\r\n'.encode('utf-8'))
         
     body.extend(f"--{boundary}\r\n".encode('utf-8'))
-    body.extend(f'Content-Disposition: form-data; name="photo"; filename="captcha.png"\r\n'.encode('utf-8'))
+    body.extend(f'Content-Disposition: form-data; name="photo"; filename="image.png"\r\n'.encode('utf-8'))
     body.extend(b'Content-Type: image/png\r\n\r\n')
-    body.extend(display_bytes)
+    body.extend(image_bytes)
     body.extend(b'\r\n')
-    
     body.extend(f"--{boundary}--\r\n".encode('utf-8'))
 
     headers = {
@@ -110,43 +104,61 @@ def send_telegram_photo(image_bytes, caption=""):
         print(f"❌ Failed to send Telegram photo: {e}")
 
 
+def take_and_send_screenshot(page, acc_name, step_name):
+    """گرفتن اسکرین شات از کل صفحه و ارسال به تلگرام"""
+    try:
+        page.wait_for_timeout(2000) # کمی صبر برای لود کامل انیمیشن‌ها
+        log_and_notify(f"📸 [{acc_name}] Taking full page screenshot for: {step_name}")
+        screenshot_bytes = page.screenshot(full_page=True)
+        caption = f"🖥 [{acc_name}] - {step_name}"
+        send_telegram_photo(screenshot_bytes, caption=caption)
+    except Exception as e:
+        log_and_notify(f"❌ [{acc_name}] Failed to take screenshot ({step_name}): {e}")
+
+
 def check_and_start_server(page, acc_name):
     """چک کردن وضعیت آنلاین بودن، کلیک روی Start و بررسی روشن شدن سرور"""
     try:
-        status_locator = page.locator('[data-put="status"]')
-        if status_locator.is_visible():
-            status_text = status_locator.text_content().strip().lower()
-            log_and_notify(f"📊 [{acc_name}] Current Server Status: '{status_text}'")
+        # صبر کردن تا وضعیت سرور حتما در صفحه لود شود (حداکثر 15 ثانیه)
+        status_selector = '[data-put="status"]'
+        page.wait_for_selector(status_selector, timeout=15000)
+        status_locator = page.locator(status_selector)
+        
+        status_text = status_locator.text_content().strip().lower()
+        log_and_notify(f"📊 [{acc_name}] Current Server Status: '{status_text}'")
 
-            if status_text != "online":
-                log_and_notify(f"🔴 [{acc_name}] Server is NOT online. Attempting to click Start...")
-                start_btn = page.locator('button[data-state="start"]')
-                if start_btn.is_visible():
-                    start_btn.click(force=True)
-                    log_and_notify(f"▶️ [{acc_name}] Clicked 'Start' button successfully. Waiting for server to come online...")
+        if status_text != "online":
+            log_and_notify(f"🔴 [{acc_name}] Server is NOT online. Looking for Start button...")
+            
+            # پیدا کردن دکمه استارت و صبر برای ظاهر شدن آن
+            start_btn_selector = 'button[data-state="start"]'
+            try:
+                page.wait_for_selector(start_btn_selector, state="visible", timeout=10000)
+                start_btn = page.locator(start_btn_selector)
+                
+                start_btn.click(force=True)
+                log_and_notify(f"▶️ [{acc_name}] Clicked 'Start' button successfully. Waiting for server to come online...")
+                
+                # بررسی و انتظار برای روشن شدن کامل سرور (حداکثر ۱۲ بار تلاش ۵ ثانیه‌ای = ۱ دقیقه)
+                max_checks = 12
+                for check in range(1, max_checks + 1):
+                    page.wait_for_timeout(5000)
+                    current_status = status_locator.text_content().strip().lower()
+                    log_and_notify(f"⏳ [{acc_name}] Status check ({check}/{max_checks}): '{current_status}'")
                     
-                    # بررسی و انتظار برای روشن شدن کامل سرور (حداکثر ۱۰ بار تلاش ۳ ثانیه‌ای = ۳۰ ثانیه)
-                    max_checks = 10
-                    for check in range(1, max_checks + 1):
-                        page.wait_for_timeout(3000)
-                        current_status = status_locator.text_content().strip().lower()
-                        log_and_notify(f"⏳ [{acc_name}] Checking status after start attempt ({check}/{max_checks}): '{current_status}'")
-                        
-                        if current_status == "online":
-                            log_and_notify(f"🟢 [{acc_name}] Server is now ONLINE!")
-                            return True
+                    if current_status == "online":
+                        log_and_notify(f"🟢 [{acc_name}] Server is now ONLINE!")
+                        return True
 
-                    log_and_notify(f"⚠️ [{acc_name}] Server did not reach 'online' state within timeout (Current status: '{current_status}').")
-                    return False
-                else:
-                    log_and_notify(f"⚠️ [{acc_name}] Start button not found.")
-                    return False
-            else:
-                log_and_notify(f"🟢 [{acc_name}] Server is already online.")
-                return True
+                log_and_notify(f"⚠️ [{acc_name}] Server did not reach 'online' state within timeout (Current status: '{current_status}').")
+                return False
+                
+            except Exception:
+                log_and_notify(f"⚠️ [{acc_name}] Start button not found or not clickable. Check the final screenshot!")
+                return False
         else:
-            log_and_notify(f"⚠️ [{acc_name}] Server status element not found.")
-            return False
+            log_and_notify(f"🟢 [{acc_name}] Server is already online.")
+            return True
     except Exception as e:
         log_and_notify(f"❌ [{acc_name}] Error checking/starting server: {e}")
         return False
@@ -178,7 +190,7 @@ def extend_time_with_retry(page, acc_name):
 
     if not is_countdown_zero(page):
         log_and_notify(f"🟢 [{acc_name}] Time is already extended. No action needed.")
-        return True
+        return False # یعنی نیازی به تمدید نبود
 
     for attempt in range(1, max_attempts + 1):
         log_and_notify(f"🔄 [{acc_name}] Attempt {attempt}/{max_attempts} to solve CAPTCHA & extend time...")
@@ -186,35 +198,24 @@ def extend_time_with_retry(page, acc_name):
         if not page.is_visible(button_selector):
             log_and_notify(f"⚠️ [{acc_name}] 'Extend time' button not visible. Reloading page...")
             page.reload(timeout=60000)
-            page.wait_for_timeout(3000)
+            page.wait_for_timeout(5000)
             continue
 
-        # حل کپچا
         if page.is_visible(captcha_img_selector):
             try:
-                # اطمینان از لود شدن کامل عکس
-                page.wait_for_function(
-                    f"document.querySelector('{captcha_img_selector}').complete", 
-                    timeout=10000
-                )
-                page.wait_for_timeout(500)
+                page.wait_for_function(f"document.querySelector('{captcha_img_selector}').complete", timeout=10000)
+                page.wait_for_timeout(1000)
 
-                # گرفتن عکس خام مستقیم از عنصر
                 raw_captcha_bytes = page.locator(captcha_img_selector).screenshot()
-                
-                # تبدیل پس‌زمینه به سفید قبل از دادن به ddddocr
                 processed_captcha_bytes = make_background_white(raw_captcha_bytes)
                 
-                # خواندن کپچا با ddddocr با عکس پردازش شده
                 captcha_text = ocr.classification(processed_captcha_bytes).strip()
                 if not captcha_text:
                     captcha_text = "EMPTY"
 
-                # ارسال به تلگرام
                 caption = f"🧩 [{acc_name}] CAPTCHA Attempt #{attempt}\nAI Result: '{captcha_text}'"
                 send_telegram_photo(processed_captcha_bytes, caption=caption)
 
-                # پر کردن اینپوت کپچا
                 page.fill(captcha_input_selector, "")
                 page.fill(captcha_input_selector, captcha_text)
                 page.wait_for_timeout(500)
@@ -222,25 +223,21 @@ def extend_time_with_retry(page, acc_name):
             except Exception as e:
                 log_and_notify(f"❌ [{acc_name}] Error solving captcha: {e}")
 
-        # کلیک روی دکمه Extend time
         log_and_notify(f"👉 [{acc_name}] Clicking Extend button...")
         page.click(button_selector)
-        page.wait_for_timeout(4000)
+        page.wait_for_timeout(5000) # صبر برای اعمال تغییرات در سرور سایت
 
-        # چک کردن تایمر
         if not is_countdown_zero(page):
             log_and_notify(f"✅ [{acc_name}] SUCCESS! Server time extended on attempt {attempt}.")
-            return True
+            return True # تمدید موفقیت آمیز بود
         else:
             log_and_notify(f"❌ [{acc_name}] Attempt {attempt} failed. Countdown is still 00:00:00.")
-            if attempt < max_attempts:
-                if page.is_visible(captcha_img_selector):
-                    log_and_notify(f"🔄 [{acc_name}] Refreshing CAPTCHA image for next try...")
-                    page.click(captcha_img_selector)
-                    page.wait_for_timeout(3000)
+            if attempt < max_attempts and page.is_visible(captcha_img_selector):
+                log_and_notify(f"🔄 [{acc_name}] Refreshing CAPTCHA image for next try...")
+                page.click(captcha_img_selector)
+                page.wait_for_timeout(3000)
 
-    error_msg = f"🚨 **ALERT [{acc_name}]**:\nFailed to extend plan after {max_attempts} attempts!"
-    log_and_notify(error_msg)
+    log_and_notify(f"🚨 **ALERT [{acc_name}]**: Failed to extend plan after {max_attempts} attempts!")
     return False
 
 
@@ -259,7 +256,7 @@ def process_account(browser, acc):
         page = context.new_page()
 
         page.goto(server_url, timeout=60000)
-        page.wait_for_timeout(3000)
+        page.wait_for_load_state("networkidle") # صبر برای لود کامل
 
         if "login" in page.url.lower():
             log_and_notify(f"⚠️ [{acc_name}] Session expired. Re-logging in...")
@@ -272,19 +269,32 @@ def process_account(browser, acc):
         page = context.new_page()
 
         page.goto(LOGIN_URL, timeout=60000)
+        page.wait_for_load_state("networkidle")
         page.fill('input[name*="login"], input[name*="username"], input[type="text"], input[type="email"]', username)
         page.fill('input[name*="password"], input[type="password"]', password)
         page.click('button[type="submit"], input[type="submit"]')
         page.wait_for_timeout(5000)
 
         page.goto(server_url, timeout=60000)
-        page.wait_for_timeout(3000)
+        page.wait_for_load_state("networkidle")
 
-    # ۱. ابتدا تمدید زمان
-    extend_time_with_retry(page, acc_name)
+    # ----- ۱. اسکرین شات اولیه از وضعیت پنل -----
+    take_and_send_screenshot(page, acc_name, "Before Processing (Initial State)")
 
-    # ۲. سپس چک کردن و روشن کردن سرور در صورت خاموش بودن + بررسی روشن شدن آن
+    # ----- ۲. تمدید زمان -----
+    was_extended = extend_time_with_retry(page, acc_name)
+    
+    # اگر زمان با موفقیت تمدید شد، یک بار صفحه را رفرش می‌کنیم تا دکمه استارت فعال شود
+    if was_extended:
+        log_and_notify(f"🔄 [{acc_name}] Reloading page to update Start button state...")
+        page.reload(timeout=60000)
+        page.wait_for_load_state("networkidle")
+
+    # ----- ۳. چک کردن و روشن کردن سرور -----
     check_and_start_server(page, acc_name)
+
+    # ----- ۴. اسکرین شات نهایی از وضعیت پنل -----
+    take_and_send_screenshot(page, acc_name, "After Processing (Final State)")
 
     try:
         context.storage_state(path=state_file)
