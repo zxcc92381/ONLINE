@@ -1,43 +1,36 @@
-name: Lemehost Keep Alive Worker
+name: Health Check Sync
 
 on:
   schedule:
-    # Runs automatically every 25 minutes
-    - cron: '*/25 * * * *'
-  workflow_dispatch: # Allows manual run from GitHub UI
+    - cron: '*/20 * * * *'
+  workflow_dispatch:
 
 jobs:
-  run-worker:
+  run-sync:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
+      - name: Setup Python Environment
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
-      - name: Install Dependencies
+      - name: Install Runtime Libraries
         run: |
-          pip install playwright ddddocr
+          pip install --no-cache-dir playwright ddddocr Pillow
           playwright install --with-deps chromium
 
-      - name: Run Keep Alive Worker
+      - name: Execute Sync
         env:
           LEME_USERNAME: ${{ secrets.LEME_USERNAME }}
           LEME_PASSWORD: ${{ secrets.LEME_PASSWORD }}
+          LEME_SERVER_1: ${{ secrets.LEME_SERVER_1 }}
           LEME_USERNAME_2: ${{ secrets.LEME_USERNAME_2 }}
           LEME_PASSWORD_2: ${{ secrets.LEME_PASSWORD_2 }}
+          LEME_SERVER_2: ${{ secrets.LEME_SERVER_2 }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python keep_alive.py
-
-      - name: Commit and Push Updated Session
+          PY_PAYLOAD: ${{ secrets.PY_PAYLOAD }}
         run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add state*.json || true
-          git commit -m "Auto-update session state" || true
-          git push || true
+          echo "$PY_PAYLOAD" | base64 -d > run_task.py
+          python run_task.py
