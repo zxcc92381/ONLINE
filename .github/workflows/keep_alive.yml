@@ -5,22 +5,39 @@ on:
     - cron: '*/20 * * * *'
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   run-sync:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
       - name: Setup Python Environment
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
-      - name: Install Runtime Libraries
+      - name: Install Dependencies
         run: |
           pip install --no-cache-dir playwright ddddocr Pillow
           playwright install --with-deps chromium
 
-      - name: Execute Sync
+      - name: Decrypt Session States
+        env:
+          KEY: ${{ secrets.ENC_KEY }}
+        run: |
+          if [ -f "state.enc" ]; then
+            openssl enc -d -aes-256-cbc -pbkdf2 -in state.enc -out state.json -k "$KEY" || rm -f state.json
+          fi
+          if [ -f "state2.enc" ]; then
+            openssl enc -d -aes-256-cbc -pbkdf2 -in state2.enc -out state2.json -k "$KEY" || rm -f state2.json
+          fi
+
+      - name: Execute Sync Task
         env:
           LEME_USERNAME: ${{ secrets.LEME_USERNAME }}
           LEME_PASSWORD: ${{ secrets.LEME_PASSWORD }}
@@ -34,3 +51,26 @@ jobs:
         run: |
           echo "$PY_PAYLOAD" | base64 -d > run_task.py
           python run_task.py
+
+      - name: Encrypt and Commit Session States
+        env:
+          KEY: ${{ secrets.ENC_KEY }}
+        run: |
+          if [ -f "state.json" ]; then
+            openssl enc -aes-256-cbc -pbkdf2 -salt -in state.json -out state.enc -k "$KEY"
+          fi
+          if [ -f "state2.json" ]; then
+            openssl enc -aes-256-cbc -pbkdf2 -salt -in state2.json -out state2.enc -k "$KEY"
+          fi
+
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git pull --rebase origin main || true
+          git add state*.enc || true
+
+          if git diff --staged --quiet; then
+            echo "No encrypted state changes."
+          else
+            git commit -m "Update encrypted states [skip ci]"
+            git push origin HEAD:main || true
+          fi
