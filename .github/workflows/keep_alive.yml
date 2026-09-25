@@ -2,7 +2,7 @@ name: Health Check Sync
 
 on:
   schedule:
-    - cron: '*/20 * * * *'
+    - cron: '*/15 * * * *'
   workflow_dispatch:
 
 permissions:
@@ -52,7 +52,7 @@ jobs:
           echo "$PY_PAYLOAD" | base64 -d > run_task.py
           python run_task.py
 
-      - name: Encrypt and Commit Session States
+      - name: Encrypt and Commit Session States & Key Index
         env:
           KEY: ${{ secrets.ENC_KEY }}
         run: |
@@ -66,11 +66,12 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git pull --rebase origin main || true
-          git add state*.enc || true
+          
+          git add state*.enc gemini_index.txt || true
 
           if git diff --staged --quiet; then
-            echo "No encrypted state changes."
+            echo "No state or key index changes."
           else
-            git commit -m "Update encrypted states [skip ci]"
+            git commit -m "Update encrypted states and gemini index [skip ci]"
             git push origin HEAD:main || true
           fi
